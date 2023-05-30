@@ -1,5 +1,5 @@
 #################################################################
-#    DMX.py
+#    DMX.py v2.0
 #
 # Digistar control of QLC+, and theatre lighting 
 # 
@@ -32,17 +32,17 @@
 # 4. There you can add "-w" as the command line parameter. This enables websockets on QLC+ on the default port 9999
 
 # ---Python Setup---
-# Install websockets via pip
+# Install websocket-client via pip
 # Add the DMX.py script to $Content/User/Python
+# Set the "websocketURL" variable equal to the websocket URL for QLC+
+# Set the "updateTime" variable equal to whatever update time you need.  This will poll Digistar for any new messages
+# (For "updateTime" The time is in millisecs.  A lower number is a faster, but can take more processing)
 
 
 # The following are digistar commands
 # To import the script into the Python Environment in Digistar, enter the following command.  You should see "DMX Imported" when successful
 # py com "import DMX"
-
-# To begin the communication with QLC+, make sure QLC+ is opened on the computer, and type in the following.
-# py com "DMX.Begin('ws://localhost:9999/qlcplusWS')"
-# You should see "Started DMX" if it was successful. This URL can be changed to be the computer or port number that QLC+ is running on, if not localhost:9999
+# You can put this in the startup.ds script if that floats your boat
 
 # The commands used are directly taken from the QLC+ API, and prepended with "DMX " to signal to the python program that it is a lighting command
 # See https://www.qlcplus.org/Test_Web_API.html for more information about the API
@@ -52,59 +52,72 @@
 # To change a specific widget in QLC+, type in "widgetID|widgetValue".
 # For instance, if I had a button widget configured on QLC+ whose ID was 1, I would "click" that button by sending the following command
 # py control "DMX 1|255"
+# if you'd like to send more than one command to QLC+, then you can chain together strings with \n like the following
+# which will set widget 1 to 255, and widget 2 to 100 (note that the "DMX " string is used only at the very beginning)
+# py control "DMX 1|255\n2|100"
 
 # To end the communication with QLC+, you may either issue a fadestopreset command, or send an "end" control message like so:
 # py control "end"
+# Note: Fadestopreset is commented out in this code, so that this script will persist.  The only way to end it is with "end"
 
 # ---Known bugs---
-# Sending commands too fast via Digistar will not update QLC+ in a timely manner.  The use of widgets are recommended.
 # There is no graceful handling of strings that do not comply with the QLC+ API
-# If there is a fadestopreset, lighting will break.  But that's an easy fix.
-# Right now, it's not possible to receive information back from QLC+ (for querying widget IDs and such.)
 
 #################################################################
 
-import asyncio, Ds, websockets, time
-print('DMX Imported')
+websocketURL = "ws://localhost:9999/qlcplusWS" 
+updateTime = 250
 
-class C_DMX:
-    def __init__(self):
-        print('Started DMX')
-        self.eStart = 0
-        self.eFinish = 1
-        self.nState = self.eStart
-        self.timPrev = 0.0
-        # self.nShowClockAttrRef = Ds.AllocObjectAttrRef('show', 'time')
-        # self.nTextDisplayAttrRef = Ds.AllocObjectAttrRef('timeCode', 'text')
+import websocket
+import time
 
-    def Run(self, address):
-        while self.nState != self.eFinish:
-            sCommand = Ds.GetCommand();  # check for [py control "end"]
-            if sCommand != '':
+def getDSMessage(ws):
+    stopDMX = False
+    while True:
+        if stopDMX:
+            print("stopping")
+            ws.keep_running = False
+            ws.close()
+            break;
+        time.sleep(updateTime/1000)
+        sCommand = Ds.GetCommand();
+        if sCommand != '':
+            # if sCommand.startswith('fadestopreset'):
+            #     stopDMX = True
+            #     print('Stopping DMX Processing due to fadestopreset')
+            if sCommand.startswith("DMX"):
                 print(sCommand)
-                if sCommand == 'end' or sCommand == 'fadestopreset':
-                    print('ending')
-                    self.nState = self.eFinish
-                elif sCommand.startswith("DMX"):
-                    asyncio.run(self.Update(sCommand,address))  # call update function to update lights
-                else:
-                    print(round(time.time() * 1000))
-            time.sleep(1)  # sleep 1/2 second (modify for different update rate)
-        return
+                if sCommand.startswith("DMX end"):
+                    stopDMX = True
+                    print('Stopping DMX Processing due to end command')
+                sCommand = sCommand.replace("\\n",'\n')
+                sCommand = sCommand[4:]
+                print(sCommand)
 
-    async def Update(self, sCommand, address):
-        async with websockets.connect(address) as websocket:
-            print("Connecting to " + address)
-            # await websocket.send("Digistar!")
-            # await websocket.recv()
-            await websocket.send(sCommand[4:])
-            await websocket.close()
-            # await websocket.recv()
-        return
+                lines = sCommand.split("\n")
+                for line in lines:
+                    print(line)
+                    ws.send(line)
 
-def Begin(address):
-   s = C_DMX()
-   s.Run(address)
-   print('Stopped DMX')
-   del s
-   return
+def on_message(ws, message):
+    print(message)
+
+def on_error(ws, error):
+    print(error)
+
+def on_close(ws, close_status_code, close_msg):
+    print("### QLC+ closed connection ###")
+
+def on_open(ws):
+    print("### Opened connection with QLC+ ###")
+    getDSMessage(ws)
+
+if __name__ == "__main__":
+    websocket.enableTrace(True)
+    ws = websocket.WebSocketApp(websocketURL,
+                              on_open=on_open,
+                              on_message=on_message,
+                              on_error=on_error,
+                              on_close=on_close)
+
+    ws.run_forever(reconnect=5) # Set dispatcher to automatic reconnection, 5 second reconnect delay if connection closed unexpectedly
