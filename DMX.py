@@ -70,6 +70,7 @@ updateTime = 250
 
 import websocket
 import time
+import Ds
 
 def getDSMessage(ws):
     stopDMX = False
